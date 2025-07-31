@@ -270,26 +270,30 @@ class TestS3Uploader:
             with open(file2_path, "w") as f2:
                 f2.write("Content of file 2")
 
-            # Мокаем upload_file, чтобы не выполнять реальную загрузку
-            with patch.object(uploader, "upload_file") as mock_upload_file:
-                uploader.upload_directory(
+            with patch.object(uploader, "_upload_file_with_status") as mock_upload_status:
+                mock_upload_status.return_value = 'uploaded'
+
+                result_stats = uploader.upload_directory(
                     temp_dir, s3_prefix="uploads/", skip_if_exists=True
                 )
 
-                # Проверяем, что upload_file был вызван дважды
-                # с правильными аргументами
-                expected_calls = [
-                    call(file1_path,
-                         "uploads/file1.txt",
-                         "my-bucket",
-                         True),
-                    call(file2_path,
-                         "uploads/subdir/file2.txt",
-                         "my-bucket",
-                         True),
-                ]
-                mock_upload_file.assert_has_calls(expected_calls,
-                                                  any_order=False)
+            assert mock_upload_status.call_count == 2
+
+            # Получаем список всех вызовов
+            calls_made = mock_upload_status.call_args_list
+
+            # expected_call_1 = call(file1_path, 'uploads/file1.txt', 'my-bucket', True)
+            # expected_call_2 = call(file2_path, 'uploads/subdir/file2.txt', 'my-bucket', True)
+
+            call_1_args, call_1_kwargs = calls_made[0]
+            assert call_1_args == (file1_path, 'uploads/file1.txt', 'my-bucket', True)
+            assert call_1_kwargs == {}
+
+            call_2_args, call_2_kwargs = calls_made[1]
+            assert call_2_args == (file2_path, 'uploads/subdir/file2.txt', 'my-bucket', True)
+            assert call_2_kwargs == {}
+
+            assert result_stats == {'uploaded': 2, 'skipped': 0, 'errors': 0}
 
     def test_download_file_success(self, s3_uploader):
         """Тест успешного скачивания файла."""

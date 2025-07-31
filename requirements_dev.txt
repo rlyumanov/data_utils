@@ -8,4 +8,3 @@ pytest>=7.0.0
 pytest-mock>=3.6.0
 moto>=4.0.0
 pytest
-flake8
