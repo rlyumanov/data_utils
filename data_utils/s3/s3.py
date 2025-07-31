@@ -197,20 +197,64 @@ class S3Uploader:
         :param s3_prefix: Префикс пути в S3 (например, 'uploads/')
         :param bucket_name: Название S3 бакета (опционально, если установлен default_bucket)
         :param skip_if_exists: Если True, не загружать файлы, которые уже существуют и не изменились
+        :return: Словарь со статистикой: {'uploaded': int, 'skipped': int, 'errors': int}
         """
         bucket = self._resolve_bucket(bucket_name)
         
         if not os.path.isdir(local_directory):
             print(f"Ошибка: {local_directory} не является директорией.")
-            return
+            return {'uploaded': 0, 'skipped': 0, 'errors': 1}
 
+        stats = {'uploaded': 0, 'skipped': 0, 'errors': 0}
+
+        all_files = []
         for root, dirs, files in os.walk(local_directory):
             for file in files:
                 local_file_path = os.path.join(root, file)
-                # Относительный путь от корня директории
                 relative_path = os.path.relpath(local_file_path, local_directory)
-                s3_key = os.path.join(s3_prefix, relative_path).replace("\\", "/")  # Для Windows-энджоеров
-                self.upload_file(local_file_path, s3_key, bucket, skip_if_exists)
+                s3_key = os.path.join(s3_prefix, relative_path).replace("\\", "/")
+                all_files.append((local_file_path, s3_key))
+        
+        total_files = len(all_files)
+        print(f"Найдено {total_files} файлов для загрузки.")
+
+        for i, (local_file_path, s3_key) in enumerate(all_files):
+            if not os.path.exists(local_file_path):
+                print(f"Предупреждение: файл {local_file_path} не найден, пропускаем.")
+                stats['errors'] += 1
+                continue
+
+            upload_status = self._upload_file_with_status(local_file_path, s3_key, bucket, skip_if_exists)
+            
+            if upload_status == 'uploaded':
+                stats['uploaded'] += 1
+            elif upload_status == 'skipped':
+                stats['skipped'] += 1
+            elif upload_status == 'error':
+                stats['errors'] += 1
+            
+            print(f"Обработано {i+1}/{total_files} файлов")
+
+        print(f"Загрузка завершена. Загружено: {stats['uploaded']}, Пропущено: {stats['skipped']}, Ошибок: {stats['errors']}")
+        return stats
+
+    def _upload_file_with_status(self, local_file_path, s3_key, bucket, skip_if_exists=False):
+        """
+        Внутренний метод загрузки файла, возвращающий статус операции.
+        """
+        try:
+            if not os.path.exists(local_file_path):
+                return 'error'
+
+            if skip_if_exists:
+                if self._files_are_equal(local_file_path, bucket, s3_key):
+                    return 'skipped'
+
+            self.s3_client.upload_file(local_file_path, bucket, s3_key)
+            return 'uploaded'
+            
+        except Exception:
+            return 'error'
 
     def download_file(self, s3_key, local_file_path, bucket_name=None):
         """
