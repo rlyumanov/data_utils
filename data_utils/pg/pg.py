@@ -67,21 +67,27 @@ class SyncPostgresConnector:
         self,
         query: str,
         params: Optional[tuple] = None,
+        params_list: Optional[List[tuple]] = None,
         fetch: bool = False,
-        with_columns: bool = False
-    ) -> Optional[List[tuple]]:
+        with_columns: bool = False) -> Optional[List[tuple]]:
         """
         Выполнить SQL запрос.
 
         :param query: SQL-запрос
-        :param params: Параметры для запроса
+        :param params: Параметры для одиночного запроса
+        :param params_list: Список параметров для множественной вставки
         :param fetch: Если True — вернуть результат
         :param with_columns: Если True — вернуть (data, column_names), иначе только data
         :return: В зависимости от параметров — список кортежей, либо tuple(data, column_names)
         """
         try:
             with self.conn.cursor() as cursor:
-                cursor.execute(query, params or ())
+                if params_list:
+                    # Множественная вставка
+                    cursor.executemany(query, params_list)
+                else:
+                    # Одиночный запрос
+                    cursor.execute(query, params or ())
 
                 if fetch:
                     data = cursor.fetchall()
