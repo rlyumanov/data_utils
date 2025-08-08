@@ -80,6 +80,10 @@ class SyncPostgresConnector:
         :param with_columns: Если True — вернуть (data, column_names), иначе только data
         :return: В зависимости от параметров — список кортежей, либо tuple(data, column_names)
         """
+
+        if self.conn is None:
+            raise RuntimeError("Database connection is not established")
+        
         try:
             with self.conn.cursor() as cursor:
                 if params_list:
@@ -102,9 +106,13 @@ class SyncPostgresConnector:
             self.logger.error(f"{e.diag.message_primary[:250]}...")
             raise
         except Exception as e:
-            self.conn.rollback()
+            if self.conn is not None:
+                try:
+                    self.conn.rollback()
+                except:
+                    pass
             self.logger.error(f"Query execution error: {e}\nQuery: {query[:250]}...")
-            raise 
+            raise
 
     def insert_dataframe(self, df: pd.DataFrame, table: str, page_size: int = 100) -> int:
         """Вставить DataFrame в таблицу"""
