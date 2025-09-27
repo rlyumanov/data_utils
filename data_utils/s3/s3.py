@@ -309,6 +309,74 @@ class S3Uploader:
         except ClientError as e:
             print(f"Ошибка удаления файла: {e}")
 
+    def delete_all_files_in_directory(self, prefix='', bucket_name=None, confirm=False):
+        """
+        Удаление всех файлов в директории бакета.
+
+        :param prefix: Префикс директории для удаления файлов (например, 'folder/')
+        :param bucket_name: Название S3 бакета (опционально, если установлен default_bucket)
+        :param confirm: Подтверждение выполнения операции (по умолчанию False)
+        :return: Словарь со статистикой: {'deleted': int, 'errors': int}
+        """
+        bucket = self._resolve_bucket(bucket_name)
+        
+        if confirm is False:
+            print(f"Внимание: будет удалено все содержимое директории '{prefix}' в бакете '{bucket}'.")
+            response = input("Продолжить? (y/N): ")
+            if response.lower() != 'y':
+                print("Операция отменена.")
+                return {'deleted': 0, 'errors': 0}
+        
+        try:
+            response = self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+            
+            if 'Contents' not in response:
+                print(f"Директория '{prefix}' пуста или не существует в бакете '{bucket}'")
+                return {'deleted': 0, 'errors': 0}
+            
+            files_to_delete = response['Contents']
+            total_files = len(files_to_delete)
+            print(f"Найдено {total_files} файлов для удаления.")
+            
+            objects_to_delete = [{'Key': obj['Key']} for obj in files_to_delete]
+            
+            deleted_count = 0
+            error_count = 0
+            
+            batch_size = 1000
+            for i in range(0, len(objects_to_delete), batch_size):
+                batch = objects_to_delete[i:i + batch_size]
+                
+                try:
+                    delete_response = self.s3_client.delete_objects(
+                        Bucket=bucket,
+                        Delete={
+                            'Objects': batch,
+                            'Quiet': False
+                        }
+                    )
+                    
+                    if 'Deleted' in delete_response:
+                        deleted_count += len(delete_response['Deleted'])
+                    
+                    if 'Errors' in delete_response:
+                        error_count += len(delete_response['Errors'])
+                        for error in delete_response['Errors']:
+                            print(f"Ошибка удаления файла {error['Key']}: {error['Message']}")
+                
+                except ClientError as e:
+                    print(f"Ошибка при батчевом удалении: {e}")
+                    error_count += len(batch)
+                
+                print(f"Удалено {deleted_count}/{total_files} файлов")
+            
+            print(f"Удаление завершено. Удалено: {deleted_count}, Ошибок: {error_count}")
+            return {'deleted': deleted_count, 'errors': error_count}
+            
+        except ClientError as e:
+            print(f"Ошибка получения списка файлов для удаления: {e}")
+            return {'deleted': 0, 'errors': 1}
+
     def _get_s3_url(self, bucket_name, s3_key):
         """
         Вспомогательный метод для формирования URL объекта в S3.
