@@ -242,7 +242,7 @@ class TestAsyncPostgresConnector:
     def mock_async_connection(self):
         """Фикстура, создающая мок для asyncpg connection."""
         mock_conn = AsyncMock()
-        mock_conn.is_closed.return_value = False
+        mock_conn.is_closed = MagicMock(return_value=False)
         return mock_conn
 
     @pytest.fixture
@@ -429,8 +429,9 @@ class TestAsyncPostgresConnector:
 
         # Мокаем transaction
         mock_transaction = AsyncMock()
-        mock_async_connection.transaction.return_value.__aenter__.return_value = mock_transaction
-        mock_async_connection.transaction.return_value.__aexit__.return_value = None
+        mock_async_connection.transaction = MagicMock(return_value=mock_transaction)
+        mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+        mock_transaction.__aexit__ = AsyncMock(return_value=None)
 
         result = await async_connector.insert_dataframe_executemany(sample_dataframe, 'test_table', batch_size=2)
 
@@ -455,8 +456,9 @@ class TestAsyncPostgresConnector:
 
         # Мокаем transaction
         mock_transaction = AsyncMock()
-        mock_async_connection.transaction.return_value.__aenter__.return_value = mock_transaction
-        mock_async_connection.transaction.return_value.__aexit__.return_value = None
+        mock_async_connection.transaction = MagicMock(return_value=mock_transaction)
+        mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+        mock_transaction.__aexit__ = AsyncMock(return_value=None)
 
         conflict_columns = ['id']
         update_columns = ['name', 'age']
@@ -477,10 +479,11 @@ class TestAsyncPostgresConnector:
         """Тест upsert DataFrame с автоматическим определением update_columns."""
         async_connector.conn = mock_async_connection
 
-        # Мокаем transaction
+        # Мокаем transaction - transaction() возвращает async context manager напрямую
         mock_transaction = AsyncMock()
-        mock_async_connection.transaction.return_value.__aenter__.return_value = mock_transaction
-        mock_async_connection.transaction.return_value.__aexit__.return_value = None
+        mock_async_connection.transaction = MagicMock(return_value=mock_transaction)
+        mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+        mock_transaction.__aexit__ = AsyncMock(return_value=None)
 
         conflict_columns = ['id']
 
@@ -517,8 +520,9 @@ class TestAsyncPostgresConnector:
 
         # Мокаем transaction
         mock_transaction = AsyncMock()
-        mock_async_connection.transaction.return_value.__aenter__.return_value = mock_transaction
-        mock_async_connection.transaction.return_value.__aexit__.return_value = None
+        mock_async_connection.transaction = MagicMock(return_value=mock_transaction)
+        mock_transaction.__aenter__ = AsyncMock(return_value=mock_transaction)
+        mock_transaction.__aexit__ = AsyncMock(return_value=None)
 
         result = await async_connector.upsert_dataframe_with_ids(df, 'test_table', 'user_id', batch_size=2)
 
