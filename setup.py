@@ -6,7 +6,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="data_utils",
-    version="0.2.4",
+    version="0.3.0",
     author="r.lyumanov",
     author_email="rlyumanov@gmail.com",
     description="",
@@ -22,8 +22,6 @@ setup(
         "boto3>=1.39.17",
         "pandas>=2.0.0",
         "pyarrow>=21.0.0",
-        "psycopg2-binary==2.9.10",
-        "asyncpg==0.30.0"
     ],
 
     extras_require={

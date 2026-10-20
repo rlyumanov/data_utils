@@ -232,11 +232,25 @@ class TestS3Uploader:
         """Тест загрузки несуществующего файла."""
         uploader, mock_client = s3_uploader
 
-        uploader.upload_file("/path/does/not/exist.txt", "some/key")
+        with pytest.raises(FileNotFoundError):
+            uploader.upload_file("/path/does/not/exist.txt", "some/key")
 
         mock_client.upload_file.assert_not_called()
         captured = capsys.readouterr()
         assert "Ошибка: файл /path/does/not/exist.txt не найден." in captured.out
+
+    def test_upload_file_client_error(self, s3_uploader, temp_file, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "500", "Message": "Internal Error"}}
+        mock_client.upload_file.side_effect = ClientError(error_response, "PutObject")
+
+        with pytest.raises(ClientError):
+            uploader.upload_file(temp_file, "some/key")
+
+        captured = capsys.readouterr()
+        assert "Ошибка загрузки файла" in captured.out
 
     def test_upload_file_skip_if_exists_true(self, s3_uploader, temp_file):
         """Тест пропуска загрузки, если файл не изменился."""
@@ -316,20 +330,82 @@ class TestS3Uploader:
         uploader, mock_client = s3_uploader
         uploader.default_bucket = "list-bucket"
 
-        mock_client.list_objects_v2.return_value = {
+        paginator = mock_client.get_paginator.return_value
+        paginator.paginate.return_value = [{
             "Contents": [
                 {"Key": "file1.txt"},
                 {"Key": "folder/file2.txt"},
                 {"Key": "file3.log"},
             ]
-        }
+        }]
 
         files = uploader.list_files(prefix="folder/")
 
-        mock_client.list_objects_v2.assert_called_once_with(
+        mock_client.get_paginator.assert_called_once_with("list_objects_v2")
+        paginator.paginate.assert_called_once_with(
             Bucket="list-bucket", Prefix="folder/"
         )
         assert files == ["file1.txt", "folder/file2.txt", "file3.log"]
+
+    def test_list_files_multiple_pages(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+        first_page = [f"data/{i}.parquet" for i in range(1000)]
+        second_page = [f"data/{i}.parquet" for i in range(1000, 1500)]
+        mock_client.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [{"Key": key} for key in first_page]},
+            {"Contents": [{"Key": key} for key in second_page]},
+        ]
+
+        files = uploader.list_files(prefix="data/")
+
+        assert files == first_page + second_page
+
+    def test_list_files_empty(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+        mock_client.get_paginator.return_value.paginate.return_value = [{"KeyCount": 0}]
+
+        assert uploader.list_files(prefix="empty/") == []
+
+    def test_list_files_client_error(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.get_paginator.return_value.paginate.side_effect = ClientError(
+            error_response, "ListObjectsV2"
+        )
+
+        assert uploader.list_files(prefix="data/") == []
+        captured = capsys.readouterr()
+        assert "Ошибка получения списка файлов" in captured.out
+
+    def test_delete_all_files_in_directory_multiple_pages(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+        keys = [f"data/{i}.parquet" for i in range(1500)]
+        mock_client.get_paginator.return_value.paginate.return_value = [
+            {"Contents": [{"Key": key} for key in keys[:1000]]},
+            {"Contents": [{"Key": key} for key in keys[1000:]]},
+        ]
+        mock_client.delete_objects.side_effect = lambda **kwargs: {
+            "Deleted": kwargs["Delete"]["Objects"]
+        }
+
+        result = uploader.delete_all_files_in_directory("data/", confirm=True)
+
+        assert result == {"deleted": 1500, "errors": 0}
+        assert mock_client.delete_objects.call_count == 2
+        batches = [c.kwargs["Delete"]["Objects"] for c in mock_client.delete_objects.call_args_list]
+        assert [len(batch) for batch in batches] == [1000, 500]
+        assert [obj["Key"] for batch in batches for obj in batch] == keys
+
+    def test_delete_all_files_in_directory_empty(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+        mock_client.get_paginator.return_value.paginate.return_value = [{"KeyCount": 0}]
+
+        result = uploader.delete_all_files_in_directory("empty/", confirm=True)
+
+        assert result == {"deleted": 0, "errors": 0}
+        mock_client.delete_objects.assert_not_called()
 
     def test_delete_file_success(self, s3_uploader):
         """Тест успешного удаления файла."""

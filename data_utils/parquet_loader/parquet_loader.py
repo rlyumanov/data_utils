@@ -2,6 +2,9 @@ import io
 import pandas as pd
 import tempfile
 import os
+from botocore.exceptions import ClientError
+
+NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
 
 class ParquetUploader:
     def __init__(self, s3_uploader):
@@ -23,6 +26,7 @@ class ParquetUploader:
         :param skip_if_exists: Если True, не загружать файл, если он уже существует и не изменился
         :param parquet_kwargs: Дополнительные параметры для to_parquet (опционально)
         """
+        tmp_file_path = None
         try:
             buffer = io.BytesIO()
             parquet_kwargs = parquet_kwargs or {}
@@ -41,10 +45,12 @@ class ParquetUploader:
                 skip_if_exists=skip_if_exists
             )
             
-            os.unlink(tmp_file_path)
-            
         except Exception as e:
             print(f"Ошибка загрузки DataFrame: {e}")
+            raise
+        finally:
+            if tmp_file_path:
+                os.unlink(tmp_file_path)
 
     def upload_tuples(self, data, s3_key, columns=None, bucket_name=None, 
                      skip_if_exists=False, parquet_kwargs=None):
@@ -64,6 +70,7 @@ class ParquetUploader:
             
         except Exception as e:
             print(f"Ошибка загрузки данных кортежей: {e}")
+            raise
 
     def download_dataframe(self, s3_key, bucket_name=None):
         """
@@ -71,7 +78,7 @@ class ParquetUploader:
 
         :param s3_key: Ключ объекта в S3
         :param bucket_name: Название S3 бакета (опционально, если установлен default_bucket)
-        :return: pandas DataFrame или None в случае ошибки
+        :return: pandas DataFrame или None, если файла нет
         """
         try:
             # Скачивание через существующий клиент в память
@@ -79,13 +86,19 @@ class ParquetUploader:
             bucket = self.s3_uploader._resolve_bucket(bucket_name)
             self.s3_uploader.s3_client.download_fileobj(bucket, s3_key, buffer)
             buffer.seek(0)
-            
+
             # Чтение Parquet в DataFrame
             df = pd.read_parquet(buffer)
             return df
+        except ClientError as e:
+            if e.response.get("Error", {}).get("Code") in NOT_FOUND_CODES:
+                print(f"Файл {s3_key} не найден в S3")
+                return None
+            print(f"Ошибка скачивания DataFrame: {e}")
+            raise
         except Exception as e:
             print(f"Ошибка скачивания DataFrame: {e}")
-            return None
+            raise
 
     def dataframe_to_s3_url(self, df, s3_key, bucket_name=None, skip_if_exists=False):
         """
@@ -114,33 +127,23 @@ class ParquetUploader:
         :return: Объединенный DataFrame
         """
         try:
-            # Проверяем, существует ли файл в S3
-            bucket = self.s3_uploader._resolve_bucket(bucket_name)
-            existing_df = None
-            
-            try:
-                existing_df = self.download_dataframe(s3_key, bucket_name)
-            except Exception:
-                # Файл не существует, создаем новый
+            existing_df = self.download_dataframe(s3_key, bucket_name)
+
+            if existing_df is None:
                 print(f"Файл {s3_key} не существует, создаем новый")
                 self.upload_dataframe(new_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
                 return new_df
-            
-            if existing_df is not None:
-                # Выполняем upsert: объединяем существующие и новые данные
-                # Удаляем дубликаты по ключевым колонкам, оставляя новые записи
-                combined_df = self._perform_upsert(existing_df, new_df, key_columns)
-                
-                self.upload_dataframe(combined_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
-                return combined_df
-            else:
-                # Если существующий файл не удалось прочитать, загружаем новый
-                self.upload_dataframe(new_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
-                return new_df
-                
+
+            # Выполняем upsert: объединяем существующие и новые данные
+            # Удаляем дубликаты по ключевым колонкам, оставляя новые записи
+            combined_df = self._perform_upsert(existing_df, new_df, key_columns)
+
+            self.upload_dataframe(combined_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
+            return combined_df
+
         except Exception as e:
             print(f"Ошибка при upsert операции: {e}")
-            return None
+            raise
 
     def _perform_upsert(self, existing_df, new_df, key_columns):
         """
@@ -152,9 +155,10 @@ class ParquetUploader:
         :return: Объединенный DataFrame
         """
         try:
-            missing_keys = set(key_columns) - set(existing_df.columns) - set(new_df.columns)
-            if missing_keys:
-                raise ValueError(f"Отсутствуют ключевые колонки: {missing_keys}")
+            for name, df in (("существующих", existing_df), ("новых", new_df)):
+                missing_keys = set(key_columns) - set(df.columns)
+                if missing_keys:
+                    raise ValueError(f"В {name} данных отсутствуют ключевые колонки: {missing_keys}")
             
             # Удаляем дубликаты из существующего DataFrame по ключевым колонкам,
             # которые присутствуют в новом DataFrame
@@ -182,8 +186,7 @@ class ParquetUploader:
             
         except Exception as e:
             print(f"Ошибка при выполнении upsert: {e}")
-            # В случае ошибки возвращаем объединение всех данных
-            return pd.concat([existing_df, new_df], ignore_index=True)
+            raise
 
     def append_dataframe(self, new_df, s3_key, bucket_name=None, parquet_kwargs=None):
         """
@@ -196,26 +199,18 @@ class ParquetUploader:
         :return: Объединенный DataFrame
         """
         try:
-            existing_df = None
-            
-            try:
-                existing_df = self.download_dataframe(s3_key, bucket_name)
-            except Exception:
-                # Файл не существует, создаем новый
+            existing_df = self.download_dataframe(s3_key, bucket_name)
+
+            if existing_df is None:
                 print(f"Файл {s3_key} не существует, создаем новый")
                 self.upload_dataframe(new_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
                 return new_df
-            
-            if existing_df is not None:
-                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                
-                self.upload_dataframe(combined_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
-                return combined_df
-            else:
-                # Если существующий файл не удалось прочитать, загружаем новый
-                self.upload_dataframe(new_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
-                return new_df
-                
+
+            combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+
+            self.upload_dataframe(combined_df, s3_key, bucket_name, parquet_kwargs=parquet_kwargs)
+            return combined_df
+
         except Exception as e:
             print(f"Ошибка при добавлении данных: {e}")
-            return None
+            raise
