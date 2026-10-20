@@ -275,6 +275,13 @@ class S3Uploader:
         except ClientError as e:
             print(f"Ошибка скачивания файла: {e}")
 
+    def _list_keys(self, bucket_name, prefix=''):
+        paginator = self.s3_client.get_paginator('list_objects_v2')
+        keys = []
+        for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+            keys.extend(obj['Key'] for obj in page.get('Contents', []))
+        return keys
+
     def list_files(self, prefix='', bucket_name=None):
         """
         Получение списка файлов в бакете с опциональным префиксом.
@@ -284,13 +291,9 @@ class S3Uploader:
         :return: Список ключей файлов
         """
         bucket = self._resolve_bucket(bucket_name)
-        
+
         try:
-            response = self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
-            if 'Contents' in response:
-                return [obj['Key'] for obj in response['Contents']]
-            else:
-                return []
+            return self._list_keys(bucket, prefix)
         except ClientError as e:
             print(f"Ошибка получения списка файлов: {e}")
             return []
@@ -329,17 +332,16 @@ class S3Uploader:
                 return {'deleted': 0, 'errors': 0}
         
         try:
-            response = self.s3_client.list_objects_v2(Bucket=bucket, Prefix=prefix)
-            
-            if 'Contents' not in response:
+            keys = self._list_keys(bucket, prefix)
+
+            if not keys:
                 print(f"Директория '{prefix}' пуста или не существует в бакете '{bucket}'")
                 return {'deleted': 0, 'errors': 0}
-            
-            files_to_delete = response['Contents']
-            total_files = len(files_to_delete)
+
+            total_files = len(keys)
             print(f"Найдено {total_files} файлов для удаления.")
-            
-            objects_to_delete = [{'Key': obj['Key']} for obj in files_to_delete]
+
+            objects_to_delete = [{'Key': key} for key in keys]
             
             deleted_count = 0
             error_count = 0
