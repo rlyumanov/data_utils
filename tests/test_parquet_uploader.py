@@ -2,6 +2,7 @@ import pytest
 import pandas as pd
 import io
 from unittest.mock import MagicMock, patch, ANY
+from botocore.exceptions import ClientError
 from data_utils.parquet_loader.parquet_loader import ParquetUploader
 
 
@@ -88,10 +89,17 @@ class TestParquetUploader:
         s3_key = 'data/test.parquet'
         # Мокаем to_parquet, чтобы он выбрасывал исключение
         with patch.object(sample_dataframe, 'to_parquet', side_effect=Exception("Test error")):
-            parquet_uploader.upload_dataframe(sample_dataframe, s3_key)
+            with pytest.raises(Exception, match="Test error"):
+                parquet_uploader.upload_dataframe(sample_dataframe, s3_key)
 
         captured = capsys.readouterr()
         assert "Ошибка загрузки DataFrame: Test error" in captured.out
+
+    def test_upload_dataframe_upload_error(self, parquet_uploader, mock_s3_uploader, sample_dataframe):
+        mock_s3_uploader.upload_file.side_effect = Exception("Upload error")
+
+        with pytest.raises(Exception, match="Upload error"):
+            parquet_uploader.upload_dataframe(sample_dataframe, 'data/test.parquet')
 
     # Тесты для upload_tuples
 
@@ -132,7 +140,8 @@ class TestParquetUploader:
         data = [(1, 'a')]
         s3_key = 'data/error.parquet'
         with patch('data_utils.parquet_loader.parquet_loader.pd.DataFrame', side_effect=Exception("DataFrame error")):
-            parquet_uploader.upload_tuples(data, s3_key)
+            with pytest.raises(Exception, match="DataFrame error"):
+                parquet_uploader.upload_tuples(data, s3_key)
 
         captured = capsys.readouterr()
         assert "Ошибка загрузки данных кортежей: DataFrame error" in captured.out
@@ -168,11 +177,24 @@ class TestParquetUploader:
         mock_s3_uploader.s3_client.download_fileobj.side_effect = Exception("Download error")
         mock_s3_uploader._resolve_bucket.return_value = 'error-bucket'
 
-        result_df = parquet_uploader.download_dataframe(s3_key, 'error-bucket')
+        with pytest.raises(Exception, match="Download error"):
+            parquet_uploader.download_dataframe(s3_key, 'error-bucket')
 
-        assert result_df is None
         captured = capsys.readouterr()
         assert "Ошибка скачивания DataFrame: Download error" in captured.out
+
+    def test_download_dataframe_not_found(self, parquet_uploader, mock_s3_uploader):
+        error_response = {"Error": {"Code": "404", "Message": "Not Found"}}
+        mock_s3_uploader.s3_client.download_fileobj.side_effect = ClientError(error_response, "HeadObject")
+
+        assert parquet_uploader.download_dataframe('data/missing.parquet') is None
+
+    def test_download_dataframe_client_error(self, parquet_uploader, mock_s3_uploader):
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_s3_uploader.s3_client.download_fileobj.side_effect = ClientError(error_response, "HeadObject")
+
+        with pytest.raises(ClientError):
+            parquet_uploader.download_dataframe('data/forbidden.parquet')
 
     # Тесты для dataframe_to_s3_url
 
@@ -201,7 +223,7 @@ class TestParquetUploader:
         s3_key = 'data/append_new.parquet'
         bucket_name = 'append-bucket'
 
-        with patch.object(parquet_uploader, 'download_dataframe', side_effect=Exception("File not found")):
+        with patch.object(parquet_uploader, 'download_dataframe', return_value=None):
             with patch.object(parquet_uploader, 'upload_dataframe') as mock_upload_df:
                 result_df = parquet_uploader.append_dataframe(new_df, s3_key, bucket_name)
 
@@ -234,13 +256,13 @@ class TestParquetUploader:
 
         with patch.object(parquet_uploader, 'download_dataframe', side_effect=Exception("Read error")):
             with patch.object(parquet_uploader, 'upload_dataframe') as mock_upload_df:
-                result_df = parquet_uploader.append_dataframe(new_df, s3_key)
+                with pytest.raises(Exception, match="Read error"):
+                    parquet_uploader.append_dataframe(new_df, s3_key)
 
-                mock_upload_df.assert_called_once_with(new_df, s3_key, None, parquet_kwargs=None)
-                pd.testing.assert_frame_equal(result_df, new_df)
+                mock_upload_df.assert_not_called()
 
                 captured = capsys.readouterr()
-                assert "Файл data/append_error.parquet не существует, создаем новый" in captured.out
+                assert "Ошибка при добавлении данных: Read error" in captured.out
 
     # Тесты для upsert_dataframe и _perform_upsert
 
@@ -288,3 +310,29 @@ class TestParquetUploader:
         result_sorted = result_df.sort_values('id').reset_index(drop=True)
         expected_sorted = pd.DataFrame({'id': [1, 2, 3, 4], 'val': ['A_updated', 'B', 'C', 'D']}).sort_values('id').reset_index(drop=True)
         pd.testing.assert_frame_equal(result_sorted, expected_sorted)
+
+    def test_upsert_dataframe_read_error(self, parquet_uploader, mock_s3_uploader):
+        new_df = pd.DataFrame({'id': [1], 'val': ['A']})
+
+        with patch.object(parquet_uploader, 'download_dataframe', side_effect=Exception("Read error")):
+            with patch.object(parquet_uploader, 'upload_dataframe') as mock_upload_df:
+                with pytest.raises(Exception, match="Read error"):
+                    parquet_uploader.upsert_dataframe(new_df, 'data/upsert_error.parquet', ['id'])
+
+                mock_upload_df.assert_not_called()
+
+    def test_upsert_dataframe_upload_error(self, parquet_uploader, mock_s3_uploader):
+        existing_df = pd.DataFrame({'id': [1], 'val': ['A']})
+        new_df = pd.DataFrame({'id': [2], 'val': ['B']})
+
+        with patch.object(parquet_uploader, 'download_dataframe', return_value=existing_df):
+            with patch.object(parquet_uploader, 'upload_dataframe', side_effect=Exception("Upload error")):
+                with pytest.raises(Exception, match="Upload error"):
+                    parquet_uploader.upsert_dataframe(new_df, 'data/upsert_error.parquet', ['id'])
+
+    def test_perform_upsert_missing_key_in_existing(self, parquet_uploader):
+        existing_df = pd.DataFrame({'ad_id': [1], 'val': ['A']})
+        new_df = pd.DataFrame({'ads_id': [1], 'val': ['B']})
+
+        with pytest.raises(ValueError, match="существующих"):
+            parquet_uploader._perform_upsert(existing_df, new_df, ['ads_id'])

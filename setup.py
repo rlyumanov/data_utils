@@ -22,8 +22,6 @@ setup(
         "boto3>=1.39.17",
         "pandas>=2.0.0",
         "pyarrow>=21.0.0",
-        "psycopg2-binary==2.9.10",
-        "asyncpg==0.30.0"
     ],
 
     extras_require={

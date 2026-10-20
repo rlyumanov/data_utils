@@ -232,11 +232,25 @@ class TestS3Uploader:
         """Тест загрузки несуществующего файла."""
         uploader, mock_client = s3_uploader
 
-        uploader.upload_file("/path/does/not/exist.txt", "some/key")
+        with pytest.raises(FileNotFoundError):
+            uploader.upload_file("/path/does/not/exist.txt", "some/key")
 
         mock_client.upload_file.assert_not_called()
         captured = capsys.readouterr()
         assert "Ошибка: файл /path/does/not/exist.txt не найден." in captured.out
+
+    def test_upload_file_client_error(self, s3_uploader, temp_file, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "500", "Message": "Internal Error"}}
+        mock_client.upload_file.side_effect = ClientError(error_response, "PutObject")
+
+        with pytest.raises(ClientError):
+            uploader.upload_file(temp_file, "some/key")
+
+        captured = capsys.readouterr()
+        assert "Ошибка загрузки файла" in captured.out
 
     def test_upload_file_skip_if_exists_true(self, s3_uploader, temp_file):
         """Тест пропуска загрузки, если файл не изменился."""

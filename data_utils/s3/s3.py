@@ -176,7 +176,7 @@ class S3Uploader:
         
         if not os.path.exists(local_file_path):
             print(f"Ошибка: файл {local_file_path} не найден.")
-            return
+            raise FileNotFoundError(local_file_path)
 
         if skip_if_exists:
             if self._files_are_equal(local_file_path, bucket, s3_key):
@@ -188,6 +188,7 @@ class S3Uploader:
             print(f"Файл {local_file_path} успешно загружен в {self._get_s3_url(bucket, s3_key)}")
         except ClientError as e:
             print(f"Ошибка загрузки файла: {e}")
+            raise
 
     def upload_directory(self, local_directory, s3_prefix='', bucket_name=None, skip_if_exists=False):
         """
