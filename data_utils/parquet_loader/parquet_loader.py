@@ -108,7 +108,7 @@ class ParquetUploader:
         :param s3_key: Ключ объекта в S3
         :param bucket_name: Название S3 бакета (опционально)
         :param skip_if_exists: Пропустить, если файл не изменился
-        :return: URL файла в S3 или None
+        :return: URL файла в S3
         """
         self.upload_dataframe(df, s3_key, bucket_name, skip_if_exists)
         bucket = self.s3_uploader._resolve_bucket(bucket_name)
