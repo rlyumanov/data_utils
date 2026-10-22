@@ -4,6 +4,8 @@ import hashlib
 from botocore.exceptions import ClientError
 from datetime import datetime
 
+NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+
 class S3Uploader:
     def __init__(self, aws_access_key_id, aws_secret_access_key, endpoint_url=None, 
                  region_name='us-east-1', default_bucket=None, debug=False):
@@ -60,12 +62,12 @@ class S3Uploader:
                 'last_modified': response['LastModified']
             }
         except ClientError as e:
-            if e.response['Error']['Code'] == '404':
+            if e.response['Error']['Code'] in NOT_FOUND_CODES:
                 # Файл не найден
                 return None
             else:
                 print(f"Ошибка получения информации о файле {s3_key}: {e}")
-                return None
+                raise
 
     def _files_are_equal(self, local_file_path, bucket_name, s3_key):
         """
@@ -254,7 +256,8 @@ class S3Uploader:
             self.s3_client.upload_file(local_file_path, bucket, s3_key)
             return 'uploaded'
             
-        except Exception:
+        except Exception as e:
+            print(f"Ошибка загрузки файла {local_file_path} в {s3_key}: {e}")
             return 'error'
 
     def download_file(self, s3_key, local_file_path, bucket_name=None):
@@ -269,11 +272,14 @@ class S3Uploader:
         
         try:
             # Создание директории, если она не существует
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            local_dir = os.path.dirname(local_file_path)
+            if local_dir:
+                os.makedirs(local_dir, exist_ok=True)
             self.s3_client.download_file(bucket, s3_key, local_file_path)
             print(f"Файл успешно скачан из {self._get_s3_url(bucket, s3_key)} в {local_file_path}")
         except ClientError as e:
             print(f"Ошибка скачивания файла: {e}")
+            raise
 
     def _list_keys(self, bucket_name, prefix=''):
         paginator = self.s3_client.get_paginator('list_objects_v2')
@@ -296,7 +302,7 @@ class S3Uploader:
             return self._list_keys(bucket, prefix)
         except ClientError as e:
             print(f"Ошибка получения списка файлов: {e}")
-            return []
+            raise
 
     def delete_file(self, s3_key, bucket_name=None):
         """
@@ -312,6 +318,7 @@ class S3Uploader:
             print(f"Файл {s3_key} успешно удален из бакета {bucket}")
         except ClientError as e:
             print(f"Ошибка удаления файла: {e}")
+            raise
 
     def delete_all_files_in_directory(self, prefix='', bucket_name=None, confirm=False):
         """
@@ -412,6 +419,7 @@ class S3Uploader:
                 print(f"Бакет {bucket} уже принадлежит вам")
             else:
                 print(f"Ошибка создания бакета: {e}")
+                raise
 
     def list_buckets(self):
         """
@@ -425,4 +433,4 @@ class S3Uploader:
             return buckets
         except ClientError as e:
             print(f"Ошибка получения списка бакетов: {e}")
-            return []
+            raise

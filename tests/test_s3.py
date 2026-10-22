@@ -94,12 +94,13 @@ class TestS3Uploader:
             "last_modified": datetime(2023, 10, 27, 10, 0, 0),
         }
 
-    def test_get_s3_object_info_not_found(self, s3_uploader, capsys):
+    @pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
+    def test_get_s3_object_info_not_found(self, s3_uploader, capsys, code):
         """Тест получения информации о несуществующем объекте S3."""
         uploader, mock_client = s3_uploader
         from botocore.exceptions import ClientError
 
-        error_response = {"Error": {"Code": "404", "Message": "Not Found"}}
+        error_response = {"Error": {"Code": code, "Message": "Not Found"}}
         mock_client.head_object.side_effect = ClientError(error_response,
                                                           "HeadObject")
 
@@ -120,9 +121,9 @@ class TestS3Uploader:
         mock_client.head_object.side_effect = ClientError(error_response,
                                                           "HeadObject")
 
-        info = uploader._get_s3_object_info("my-bucket", "error-key")
+        with pytest.raises(ClientError):
+            uploader._get_s3_object_info("my-bucket", "error-key")
 
-        assert info is None
         captured = capsys.readouterr()
         assert "Ошибка получения информации о файле error-key" in captured.out
 
@@ -269,6 +270,18 @@ class TestS3Uploader:
 
         mock_client.upload_file.assert_not_called()
 
+    def test_upload_file_skip_if_exists_head_error(self, s3_uploader, temp_file):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.head_object.side_effect = ClientError(error_response, "HeadObject")
+
+        with pytest.raises(ClientError):
+            uploader.upload_file(temp_file, "some/key", skip_if_exists=True)
+
+        mock_client.upload_file.assert_not_called()
+
     def test_upload_directory_success(self, s3_uploader):
         """Тест успешной загрузки директории."""
         uploader, mock_client = s3_uploader
@@ -309,6 +322,42 @@ class TestS3Uploader:
 
             assert result_stats == {'uploaded': 2, 'skipped': 0, 'errors': 0}
 
+    def test_upload_file_with_status_error(self, s3_uploader, temp_file, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "500", "Message": "Internal Error"}}
+        mock_client.upload_file.side_effect = ClientError(error_response, "PutObject")
+
+        status = uploader._upload_file_with_status(temp_file, "uploads/file.txt", "test-bucket")
+
+        assert status == 'error'
+        captured = capsys.readouterr()
+        assert "uploads/file.txt" in captured.out
+        assert "Internal Error" in captured.out
+
+    def test_upload_directory_head_error_counted(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.head_object.side_effect = ClientError(error_response, "HeadObject")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = os.path.join(temp_dir, "file1.txt")
+            with open(file_path, "w") as f:
+                f.write("Content of file 1")
+
+            result_stats = uploader.upload_directory(
+                temp_dir, s3_prefix="uploads/", skip_if_exists=True
+            )
+
+        assert result_stats == {'uploaded': 0, 'skipped': 0, 'errors': 1}
+        mock_client.upload_file.assert_not_called()
+        captured = capsys.readouterr()
+        assert f"Ошибка загрузки файла {file_path} в uploads/file1.txt: " in captured.out
+        assert "Forbidden" in captured.out
+
     def test_download_file_success(self, s3_uploader):
         """Тест успешного скачивания файла."""
         uploader, mock_client = s3_uploader
@@ -324,6 +373,45 @@ class TestS3Uploader:
             )
             # Проверяем, что директория создана (os.makedirs)
             assert os.path.exists(temp_dir)
+
+    def test_download_file_creates_missing_directory(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dir = os.path.join(temp_dir, "nested", "dir")
+            local_path = os.path.join(local_dir, "downloaded_file.txt")
+
+            uploader.download_file("source/key/file.txt", local_path)
+
+            assert os.path.isdir(local_dir)
+            mock_client.download_file.assert_called_once_with(
+                "test-bucket", "source/key/file.txt", local_path
+            )
+
+    def test_download_file_without_directory(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+
+        uploader.download_file("source/key/file.txt", "downloaded_file.txt")
+
+        mock_client.download_file.assert_called_once_with(
+            "test-bucket", "source/key/file.txt", "downloaded_file.txt"
+        )
+
+    def test_download_file_client_error(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.download_file.side_effect = ClientError(error_response, "GetObject")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_path = os.path.join(temp_dir, "downloaded_file.txt")
+
+            with pytest.raises(ClientError):
+                uploader.download_file("source/key/file.txt", local_path)
+
+        captured = capsys.readouterr()
+        assert "Ошибка скачивания файла" in captured.out
 
     def test_list_files_success(self, s3_uploader):
         """Тест успешного получения списка файлов."""
@@ -375,7 +463,9 @@ class TestS3Uploader:
             error_response, "ListObjectsV2"
         )
 
-        assert uploader.list_files(prefix="data/") == []
+        with pytest.raises(ClientError):
+            uploader.list_files(prefix="data/")
+
         captured = capsys.readouterr()
         assert "Ошибка получения списка файлов" in captured.out
 
@@ -418,6 +508,19 @@ class TestS3Uploader:
             Bucket="delete-bucket", Key="to/delete/key.txt"
         )
 
+    def test_delete_file_client_error(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.delete_object.side_effect = ClientError(error_response, "DeleteObject")
+
+        with pytest.raises(ClientError):
+            uploader.delete_file("to/delete/key.txt")
+
+        captured = capsys.readouterr()
+        assert "Ошибка удаления файла" in captured.out
+
     def test_create_bucket_success(self, s3_uploader):
         """Тест успешного создания бакета."""
         uploader, mock_client = s3_uploader
@@ -439,6 +542,35 @@ class TestS3Uploader:
 
         mock_client.create_bucket.assert_called_once_with(Bucket="new-bucket")
 
+    @pytest.mark.parametrize("code, message", [
+        ("BucketAlreadyExists", "уже существует"),
+        ("BucketAlreadyOwnedByYou", "уже принадлежит вам"),
+    ])
+    def test_create_bucket_already_exists(self, s3_uploader, capsys, code, message):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": code, "Message": "Already exists"}}
+        mock_client.create_bucket.side_effect = ClientError(error_response, "CreateBucket")
+
+        uploader.create_bucket("new-bucket")
+
+        captured = capsys.readouterr()
+        assert f"Бакет new-bucket {message}" in captured.out
+
+    def test_create_bucket_client_error(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}
+        mock_client.create_bucket.side_effect = ClientError(error_response, "CreateBucket")
+
+        with pytest.raises(ClientError):
+            uploader.create_bucket("new-bucket")
+
+        captured = capsys.readouterr()
+        assert "Ошибка создания бакета" in captured.out
+
     def test_list_buckets_success(self, s3_uploader):
         """Тест успешного получения списка бакетов."""
         uploader, mock_client = s3_uploader
@@ -453,3 +585,16 @@ class TestS3Uploader:
 
         mock_client.list_buckets.assert_called_once()
         assert buckets == ["bucket1", "bucket2", "my-bucket"]
+
+    def test_list_buckets_client_error(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}
+        mock_client.list_buckets.side_effect = ClientError(error_response, "ListBuckets")
+
+        with pytest.raises(ClientError):
+            uploader.list_buckets()
+
+        captured = capsys.readouterr()
+        assert "Ошибка получения списка бакетов" in captured.out
