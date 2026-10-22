@@ -94,12 +94,13 @@ class TestS3Uploader:
             "last_modified": datetime(2023, 10, 27, 10, 0, 0),
         }
 
-    def test_get_s3_object_info_not_found(self, s3_uploader, capsys):
+    @pytest.mark.parametrize("code", ["404", "NoSuchKey", "NotFound"])
+    def test_get_s3_object_info_not_found(self, s3_uploader, capsys, code):
         """Тест получения информации о несуществующем объекте S3."""
         uploader, mock_client = s3_uploader
         from botocore.exceptions import ClientError
 
-        error_response = {"Error": {"Code": "404", "Message": "Not Found"}}
+        error_response = {"Error": {"Code": code, "Message": "Not Found"}}
         mock_client.head_object.side_effect = ClientError(error_response,
                                                           "HeadObject")
 
@@ -120,9 +121,9 @@ class TestS3Uploader:
         mock_client.head_object.side_effect = ClientError(error_response,
                                                           "HeadObject")
 
-        info = uploader._get_s3_object_info("my-bucket", "error-key")
+        with pytest.raises(ClientError):
+            uploader._get_s3_object_info("my-bucket", "error-key")
 
-        assert info is None
         captured = capsys.readouterr()
         assert "Ошибка получения информации о файле error-key" in captured.out
 
@@ -266,6 +267,18 @@ class TestS3Uploader:
                 uploader.upload_file(
                     temp_file, "key", bucket_name="bucket", skip_if_exists=True
                 )
+
+        mock_client.upload_file.assert_not_called()
+
+    def test_upload_file_skip_if_exists_head_error(self, s3_uploader, temp_file):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.head_object.side_effect = ClientError(error_response, "HeadObject")
+
+        with pytest.raises(ClientError):
+            uploader.upload_file(temp_file, "some/key", skip_if_exists=True)
 
         mock_client.upload_file.assert_not_called()
 

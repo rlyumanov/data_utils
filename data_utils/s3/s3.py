@@ -4,6 +4,8 @@ import hashlib
 from botocore.exceptions import ClientError
 from datetime import datetime
 
+NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+
 class S3Uploader:
     def __init__(self, aws_access_key_id, aws_secret_access_key, endpoint_url=None, 
                  region_name='us-east-1', default_bucket=None, debug=False):
@@ -60,12 +62,12 @@ class S3Uploader:
                 'last_modified': response['LastModified']
             }
         except ClientError as e:
-            if e.response['Error']['Code'] == '404':
+            if e.response['Error']['Code'] in NOT_FOUND_CODES:
                 # Файл не найден
                 return None
             else:
                 print(f"Ошибка получения информации о файле {s3_key}: {e}")
-                return None
+                raise
 
     def _files_are_equal(self, local_file_path, bucket_name, s3_key):
         """

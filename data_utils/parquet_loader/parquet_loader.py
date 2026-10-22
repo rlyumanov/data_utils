@@ -4,7 +4,7 @@ import tempfile
 import os
 from botocore.exceptions import ClientError
 
-NOT_FOUND_CODES = {"404", "NoSuchKey", "NotFound"}
+from ..s3.s3 import NOT_FOUND_CODES
 
 class ParquetUploader:
     def __init__(self, s3_uploader):
