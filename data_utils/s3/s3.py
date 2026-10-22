@@ -271,7 +271,9 @@ class S3Uploader:
         
         try:
             # Создание директории, если она не существует
-            os.makedirs(os.path.dirname(local_file_path), exist_ok=True)
+            local_dir = os.path.dirname(local_file_path)
+            if local_dir:
+                os.makedirs(local_dir, exist_ok=True)
             self.s3_client.download_file(bucket, s3_key, local_file_path)
             print(f"Файл успешно скачан из {self._get_s3_url(bucket, s3_key)} в {local_file_path}")
         except ClientError as e:

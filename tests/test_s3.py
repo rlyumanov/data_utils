@@ -338,6 +338,29 @@ class TestS3Uploader:
             # Проверяем, что директория создана (os.makedirs)
             assert os.path.exists(temp_dir)
 
+    def test_download_file_creates_missing_directory(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            local_dir = os.path.join(temp_dir, "nested", "dir")
+            local_path = os.path.join(local_dir, "downloaded_file.txt")
+
+            uploader.download_file("source/key/file.txt", local_path)
+
+            assert os.path.isdir(local_dir)
+            mock_client.download_file.assert_called_once_with(
+                "test-bucket", "source/key/file.txt", local_path
+            )
+
+    def test_download_file_without_directory(self, s3_uploader):
+        uploader, mock_client = s3_uploader
+
+        uploader.download_file("source/key/file.txt", "downloaded_file.txt")
+
+        mock_client.download_file.assert_called_once_with(
+            "test-bucket", "source/key/file.txt", "downloaded_file.txt"
+        )
+
     def test_download_file_client_error(self, s3_uploader, capsys):
         uploader, mock_client = s3_uploader
         from botocore.exceptions import ClientError
