@@ -322,6 +322,42 @@ class TestS3Uploader:
 
             assert result_stats == {'uploaded': 2, 'skipped': 0, 'errors': 0}
 
+    def test_upload_file_with_status_error(self, s3_uploader, temp_file, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "500", "Message": "Internal Error"}}
+        mock_client.upload_file.side_effect = ClientError(error_response, "PutObject")
+
+        status = uploader._upload_file_with_status(temp_file, "uploads/file.txt", "test-bucket")
+
+        assert status == 'error'
+        captured = capsys.readouterr()
+        assert "uploads/file.txt" in captured.out
+        assert "Internal Error" in captured.out
+
+    def test_upload_directory_head_error_counted(self, s3_uploader, capsys):
+        uploader, mock_client = s3_uploader
+        from botocore.exceptions import ClientError
+
+        error_response = {"Error": {"Code": "403", "Message": "Forbidden"}}
+        mock_client.head_object.side_effect = ClientError(error_response, "HeadObject")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            file_path = os.path.join(temp_dir, "file1.txt")
+            with open(file_path, "w") as f:
+                f.write("Content of file 1")
+
+            result_stats = uploader.upload_directory(
+                temp_dir, s3_prefix="uploads/", skip_if_exists=True
+            )
+
+        assert result_stats == {'uploaded': 0, 'skipped': 0, 'errors': 1}
+        mock_client.upload_file.assert_not_called()
+        captured = capsys.readouterr()
+        assert f"Ошибка загрузки файла {file_path} в uploads/file1.txt: " in captured.out
+        assert "Forbidden" in captured.out
+
     def test_download_file_success(self, s3_uploader):
         """Тест успешного скачивания файла."""
         uploader, mock_client = s3_uploader

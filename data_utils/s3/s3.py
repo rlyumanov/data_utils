@@ -256,7 +256,8 @@ class S3Uploader:
             self.s3_client.upload_file(local_file_path, bucket, s3_key)
             return 'uploaded'
             
-        except Exception:
+        except Exception as e:
+            print(f"Ошибка загрузки файла {local_file_path} в {s3_key}: {e}")
             return 'error'
 
     def download_file(self, s3_key, local_file_path, bucket_name=None):
