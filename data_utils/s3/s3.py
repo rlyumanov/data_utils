@@ -276,6 +276,7 @@ class S3Uploader:
             print(f"Файл успешно скачан из {self._get_s3_url(bucket, s3_key)} в {local_file_path}")
         except ClientError as e:
             print(f"Ошибка скачивания файла: {e}")
+            raise
 
     def _list_keys(self, bucket_name, prefix=''):
         paginator = self.s3_client.get_paginator('list_objects_v2')
@@ -298,7 +299,7 @@ class S3Uploader:
             return self._list_keys(bucket, prefix)
         except ClientError as e:
             print(f"Ошибка получения списка файлов: {e}")
-            return []
+            raise
 
     def delete_file(self, s3_key, bucket_name=None):
         """
@@ -314,6 +315,7 @@ class S3Uploader:
             print(f"Файл {s3_key} успешно удален из бакета {bucket}")
         except ClientError as e:
             print(f"Ошибка удаления файла: {e}")
+            raise
 
     def delete_all_files_in_directory(self, prefix='', bucket_name=None, confirm=False):
         """
@@ -414,6 +416,7 @@ class S3Uploader:
                 print(f"Бакет {bucket} уже принадлежит вам")
             else:
                 print(f"Ошибка создания бакета: {e}")
+                raise
 
     def list_buckets(self):
         """
@@ -427,4 +430,4 @@ class S3Uploader:
             return buckets
         except ClientError as e:
             print(f"Ошибка получения списка бакетов: {e}")
-            return []
+            raise
